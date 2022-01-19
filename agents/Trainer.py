@@ -103,8 +103,8 @@ class Trainer(object):
 
             if self.environment_has_changeable_goals(agent_config.environment) and self.agent_cant_handle_changeable_goals_without_flattening(agent_name):
                 print("Flattening changeable-goal environment for agent {}".format(agent_name))
-                agent_config.environment = gym.wrappers.FlattenDictWrapper(agent_config.environment,
-                                                                           dict_keys=["observation", "desired_goal"])
+                agent_config.environment = wrappers.FlattenObservation(wrappers.FilterObservation(agent_config.environment,
+                                                                           ["observation", "desired_goal"]))
 
             if self.config.randomise_random_seed: agent_config.seed = random.randint(0, 2**32 - 2)
             agent_config.hyperparameters = agent_config.hyperparameters[agent_group]

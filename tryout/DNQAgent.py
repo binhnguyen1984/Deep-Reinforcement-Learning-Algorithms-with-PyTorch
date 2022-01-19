@@ -1,122 +1,63 @@
-from statistics import mode
-import itertools
+from collections import deque
+import random
+from BasicAgent import BasicAgent
+from Networks import DNQNet
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.distributions import Categorical
-from torch.nn.init import calculate_gain
-from collections import deque
 import numpy as np
-import random
 import gym
 import matplotlib.pyplot as plt
-
-class DNQNet(nn.Module):
-    """Deep Q-learning network that learns the action-value function"""
-    def __init__(self, n_in, n_out, device, n_hidden=128, use_GPU = True):
-        super(DNQNet, self).__init__()
-        self.device = device
-        self.net = nn.Sequential(
-            nn.Linear(n_in, n_hidden),
-            nn.ReLU(inplace=False),
-            nn.Linear(n_hidden, n_out)
-        ).to(device)
-        self._relu_init(self.net[0])
-        self._linear_init(self.net[2])
-
-    def _relu_init(self, m):
-        nn.init.kaiming_normal_(
-            m.weight.data, 0.,
-            mode='fan_in',
-            nonlinearity='relu'
-        )
-        nn.init.constant_(m.bias.data, 0.)
     
-    def forward(self, input):
-        input = input.to(self.device)
-        return self.net(input)
-
-    def _linear_init(self, m):
-        nn.init.kaiming_normal_(
-            m.weight.data, 0.,
-            mode='fan_in',
-            nonlinearity='linear'
-        )
-        nn.init.constant_(m.bias.data, 0.)
-
-    def _softmax_init(self, m):
-        nn.init.xavier_normal_(
-            m.weight.data, calculate_gain('signmoid')
-        )
-        nn.init.constant_(m.bias.data, 0.)
-    
-class Replay_Buffer(object):
-    def __init__(self, capacity=50000):
-        self.memory = deque(maxlen = capacity)
-    
-    def push(self, state, action , next_state, reward, done):
-        self.memory.append((state, action, next_state, reward, done))
-
-    def sample(self, batch_size):
-        return random.sample(self.memory, batch_size)
-
-    def __len__(self):
-        return len(self.memory)
-
-class DNQAgent(nn.Module):
-    def __init__(self, env, use_GPU = True, lr = 5e-4, gamma= .99, episode_num=500, eval_reward_freq=100, epsilon_decay = 10000, epsilon_start = 1., epsilon_end=0.02, target_update_freq= 1000, replay_buffer_size=50000, min_replay_size=1000, batch_size = 32):
-        super(DNQAgent, self).__init__()
-        self.device = "cuda:0" if use_GPU else "cpu"
-        self.gamma = gamma
-        self.episode_num = episode_num
-        self.eval_reward_freq = eval_reward_freq
+class DNQAgent(BasicAgent):
+    def __init__(self, 
+                env, 
+                use_GPU = True, 
+                lr = 5e-4, 
+                gamma= .99, 
+                episode_num=500, 
+                eval_reward_freq=100, 
+                epsilon_decay = 10000, 
+                epsilon_start = 1., 
+                epsilon_end=0.02, 
+                target_update_freq= 1000, 
+                replay_buffer_size=50000, 
+                min_replay_size=1000, 
+                batch_size = 32):
+        super(DNQAgent, self).__init__(env, use_GPU, gamma, episode_num, eval_reward_freq, replay_buffer_size, min_replay_size, batch_size)
         self.epsilon_decay = epsilon_decay
         self.epsilon_start = epsilon_start
         self.epsilon_end = epsilon_end
-        self.min_replay_size = min_replay_size
+        self.epsilon = epsilon_start
         self.target_update_freq = target_update_freq
-        self.batch_size = batch_size
-        self.env = env
-        self.replay_buffer = Replay_Buffer(replay_buffer_size)
         n_observations = list(env.observation_space.shape)[0]
         self.qvalue = DNQNet(n_observations, env.action_space.n, self.device)
         self.qtarget = DNQNet(n_observations, env.action_space.n, self.device)
         self.optimizer = optim.Adam(self.qvalue.parameters(), lr = lr)
-        self.qtarget.load_state_dict(self.qvalue.state_dict())
-        self.initial_state = env.reset()
-        self.initialize_replay_buffer()
-
+        self.copy_of_target_network(self.qvalue, self.qtarget)
 
     def get_action_values(self, state):
         state = torch.from_numpy(state).float().unsqueeze(0)
         return self.qvalue(state)
 
-    def pick_action(self, epsilon, state):
+    def pick_random_action(self, state):
         with torch.no_grad():
             action_values = self.get_action_values(state)
-            if random.random() <= epsilon:
+            if random.random() <= self.epsilon:
                 return np.random.randint(0, action_values.shape[1])
             else: return torch.argmax(action_values).item()
 
-    def initialize_replay_buffer(self):
-        for _ in range(self.min_replay_size):
-            state = env.reset()
-            done = False
-            while not done:
-                 action = env.action_space.sample()
-                 next_s, reward, done, _ = self.env.step(action)
-                 self.replay_buffer.push(state, action, reward, next_s, done)
-
     def train(self):
+        super(DNQAgent, self).train()
         episode_rewards = deque([0.], maxlen=self.eval_reward_freq)
         train_rewards = []
         for episode in range(self.episode_num):
             state = self.env.reset()
             episode_reward = 0.
             done = False
-            epsilon = np.interp(episode, [0, self.episode_num], [self.epsilon_start, self.epsilon_end])            
+            self.epsilon = np.interp(episode, [0, self.episode_num], [self.epsilon_start, self.epsilon_end])            
             while not done:
-                action = self.pick_action(epsilon, state)
+                action = self.pick_random_action(state)
                 next_s, reward, done, _ = self.env.step(action)
                 self.replay_buffer.push(state, action, reward, next_s, done)
                 state = next_s
@@ -184,7 +125,7 @@ def visualize_episode(rewards):
 if __name__=="__main__":
     env = gym.make("CartPole-v0") 
     env.seed(0) # Set a random seed for the environment 
-    agent = DNQAgent(env, use_GPU=False, episode_num=50000)
+    agent = DNQAgent(env, use_GPU=False, episode_num=20000)
     train_rewards = agent.train()
     agent.evaluate()
     visualize_episode(train_rewards)
